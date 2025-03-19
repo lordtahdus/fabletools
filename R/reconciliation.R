@@ -47,13 +47,16 @@ reconcile.mdl_df <- function(.data, ...){
 #' Wickramasuriya, S. L., Athanasopoulos, G., & Hyndman, R. J. (2019). Optimal forecast reconciliation for hierarchical and grouped time series through trace minimization. Journal of the American Statistical Association, 1-45. https://doi.org/10.1080/01621459.2018.1448825 
 #' 
 #' @export
-min_trace <- function(models, method = c("wls_var", "ols", "wls_struct", "mint_cov", "mint_shrink"),
-                 sparse = NULL){
+min_trace <- function(models, method = c("wls_var", "ols", "wls_struct", "mint_cov", "mint_shrink", "test"),
+                 sparse = NULL,
+                 threshold = NULL){
   if(is.null(sparse)){
     sparse <- requireNamespace("Matrix", quietly = TRUE)
   }
   structure(models, class = c("lst_mint_mdl", "lst_mdl", "list"),
-            method = match.arg(method), sparse = sparse)
+            method = match.arg(method), 
+            sparse = sparse,
+            threshold = threshold)
 }
 
 #' @export
@@ -109,7 +112,7 @@ forecast.lst_mint_mdl <- function(object, key_data,
     W <- covm
   } else if (method == "mint_shrink"){
     # min_trace shrink
-    tar <- diag(apply(res, 2, compose(crossprod, stats::na.omit))/n)
+    tar <- diag(apply(res, 2, compose(crossprod, stats::na.omit))/n) # SSR/n 
     corm <- cov2cor(covm)
     xs <- scale(res, center = FALSE, scale = sqrt(diag(covm)))
     xs <- xs[stats::complete.cases(xs),]
@@ -120,6 +123,51 @@ forecast.lst_mint_mdl <- function(object, key_data,
     lambda <- sum(v)/sum(d)
     lambda <- max(min(lambda, 1), 0)
     W <- lambda * tar + (1 - lambda) * covm
+  } else if (method == "test"){
+    
+    # --------------------- NOVELIST FUNCTION STARTS HERE ---------------------
+    
+    print("Running test NOVELIST estimator")
+    
+    threshold <- object%@%"threshold"
+    if(is.null(threshold)) {
+      threshold <- 0.1              # default (e.g., 0.1)
+    }
+    r <- cov2cor(covm)
+    
+    # Apply soft threshold to off-diagonal
+    # For each i != j: r_thresh = sign(r) * max(|r| - threshold, 0)
+    
+    r_thresh <- r
+    for(i in seq_len(nrow(r))){
+      for(j in seq_len(ncol(r))){
+        if(i != j){
+          r_thresh[i, j] <- sign(r[i, j]) * pmax(abs(r[i, j]) - threshold, 0)
+        }
+      }
+    }
+    
+    xs <- scale(res, center = FALSE, scale = sqrt(diag(covm)))
+    xs <- xs[stats::complete.cases(xs),]
+    v <- (1/(n * (n - 1))) * (crossprod(xs^2) - 1/n * (crossprod(xs))^2)
+    diag(v) <- 0
+    
+    # Calculate optimal lambda
+    num <- sum(v[abs(r) <= threshold]) # numerator
+    d <- (r - r_thresh)^2 # implicitly cancel diagonal elements
+    denom <- sum(d) # denominator
+    
+    lambda <- if(denom == 0) 0 else num / denom
+    lambda <- max(min(lambda, 1), 0)
+    
+    # Create new (shrunk) correlation matrix: R_new = lambda * r_thresh + (1 - lambda) * r
+    R_new <- lambda * r_thresh + (1 - lambda) * r
+    # Reconstruct the covariance matrix: W = D^(1/2) %*% R_new %*% D^(1/2)
+    D_half <- diag(sqrt(diag(covm)))
+    W <- D_half %*% R_new %*% D_half
+    
+    # ---------------------- NOVELIST FUNCTION ENDS HERE ----------------------
+    
   } else {
     abort("Unknown reconciliation method")
   }
