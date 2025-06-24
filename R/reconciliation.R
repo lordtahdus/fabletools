@@ -97,7 +97,7 @@ forecast.lst_mint_mdl <- function(object, key_data,
   agg_data <- build_key_data_smat(key_data)
   
   n <- nrow(res)
-  covm <- crossprod(stats::na.omit(res)) / n
+  covm <- crossprod(stats::na.omit(res)) / n # assume resid = 0
   if(method == "ols"){
     # OLS
     W <- diag(rep(1L, nrow(covm)))
@@ -112,7 +112,7 @@ forecast.lst_mint_mdl <- function(object, key_data,
     W <- covm
   } else if (method == "mint_shrink"){
     # min_trace shrink
-    tar <- diag(apply(res, 2, compose(crossprod, stats::na.omit))/n) # SSR/n 
+    tar <- diag(apply(res, 2, compose(crossprod, stats::na.omit))/n) # SSR/n, assume mean resid = 0 
     corm <- cov2cor(covm)
     xs <- scale(res, center = FALSE, scale = sqrt(diag(covm)))
     xs <- xs[stats::complete.cases(xs),]
